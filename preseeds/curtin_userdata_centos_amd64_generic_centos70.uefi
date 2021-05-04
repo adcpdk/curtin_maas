@@ -1,0 +1,175 @@
+#cloud-config
+debconf_selections:
+ maas: |
+  {{for line in str(curtin_preseed).splitlines()}}
+  {{line}}
+  {{endfor}}
+
+showtrace: true
+
+partitioning_commands:
+  builtin:
+  - curtin
+  - block-meta
+  - custom
+
+showtrace: true
+# UEFI
+storage:
+  config:
+  - grub_device: true
+    id: sda
+    name: sda
+    ptable: gpt
+    #serial: 62cea7f074e1390028086dd5ad97dd36
+    serial: {{node.physicalblockdevice_set[0].serial}} 
+    type: disk
+    wipe: superblock
+  - device: sda
+    flag: boot
+    id: sda-part1
+    name: sda-part1
+    number: 1
+    offset: 4194304B
+    size: 536870912B
+    type: partition
+    wipe: superblock
+  - device: sda
+    id: sda-part2
+    name: sda-part2
+    number: 2
+#    size: 53141831680B
+    size: 200G
+    type: partition
+    wipe: superblock
+  - devices:
+    - sda-part2
+    id: vg
+    name: vg
+    type: lvm_volgroup
+  - id: vg-lvroot
+    name: lvroot
+#    size: 53137637376B
+    size: 30G
+    type: lvm_partition
+    volgroup: vg
+  - id: vg-lvvar
+    name: lvvar
+    size: 30G
+    type: lvm_partition
+    volgroup: vg
+  - id: vg-lvswap
+    name: lvswap
+    size: 2G
+    type: lvm_partition
+    volgroup: vg
+  - id: vg-lvsrv
+    name: lvsrv
+    size: 100G
+    type: lvm_partition
+    volgroup: vg
+  - fstype: fat32
+    id: sda-part1_format
+    label: efi
+    type: format
+    volume: sda-part1
+  - fstype: xfs
+    id: vg-lvroot_format
+    label: root
+    type: format
+    volume: vg-lvroot
+  - device: vg-lvroot_format
+    id: vg-lvroot_mount
+    path: /
+    type: mount
+  - fstype: xfs
+    id: vg-lvvar_format
+    label: var
+    type: format
+    volume: vg-lvvar
+  - device: vg-lvvar_format
+    id: vg-lvvar_mount
+    path: /var
+    type: mount
+  - fstype: swap
+    id: vg-lvswap_format
+    label: swap
+    type: format
+    volume: vg-lvswap
+  - device: vg-lvswap_format
+    id: vg-lvswap_mount
+    path: "none"
+    type: mount
+  - fstype: xfs
+    id: vg-lvsrv_format
+    label: srv
+    type: format
+    volume: vg-lvsrv
+  - device: vg-lvsrv_format
+    id: vg-lvsrv_mount
+    path: /srv
+    type: mount
+  - device: sda-part1_format
+    id: sda-part1_mount
+    path: /boot/efi
+    type: mount
+  version: 1
+
+late_commands:
+  maas: [wget, '--no-proxy', '{{node_disable_pxe_url}}', '--post-data', '{{node_disable_pxe_data}}', '-O', '/dev/null']
+
+
+write_files:
+ userconfig:
+  path: /etc/cloud/cloud.cfg.d/00-users.cfg
+  content: |
+    groups:
+      - ssh_local_users
+    users:
+      - default
+      - name: maas
+        gecos: Service Operator
+        primary_group: maas
+        groups: [sudo,docker]
+        lock_passwd: false
+        passwd: $6$bla...bla
+        ssh_authorized_keys:
+          - ssh-rsa AAA....blablabla comment
+
+ yum_repos:
+  path: /etc/cloud/cloud.cfg.d/01-repos.cfg
+  content: |
+    yum_repos:
+        centos7:
+            name: salt_centos7_repo
+            baseurl: https://linktorepo
+            enabled: true
+            gpgcheck: true
+            gpgkey: file:///etc/gpg/gpg.key
+            # any repository configuration options (see man yum.conf)
+
+ pkgs_installed:
+   path: /etc/cloud/cloud.cfg.d/98-pkgs_installed.cfg
+   content: |
+     packages:
+       - salt-minion
+       - vim
+
+ saltconfig:
+   path: /etc/cloud/cloud.cfg.d/99-salt-minion.cfg
+   content: |
+     salt_minion:
+         pkg_name: 'salt-minion'
+         service_name: 'salt-minion'
+         config_dir: '/srv/salt/etc'
+         conf:
+             master: $IP_MASTER
+             id: {{node.hostname}}.maas.local 
+             root_dir: /srv/salt
+             pki_dir: /pki/minion
+             conf_file: /srv/salt/etc/minion
+             log_file: /srv/salt/log/minion
+             log_level_logfile: info
+         grains:
+             role:
+                 - maas_staged
